@@ -1,0 +1,359 @@
+---
+title: "Age"
+author: "Holly Hake"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+# Data wrangling
+library(tidyverse)  # Includes dplyr, readr, ggplot2, and stringr, so no need to load them separately
+library(broom)      # For tidying models
+library(broom.mixed) # For tidying models of class lmerModLmerTest
+library(reshape2)   # Reshaping data (if needed)
+library(glmnet)     # Regularization for regression models
+
+# Graphics
+library(ggthemes)   # Additional themes for ggplot2
+library(ggrepel)    # Better text labels for ggplot2
+library(ppcor)      # Partial correlations
+library(ggExtra)    # Additional functions for ggplot2
+library(ggsci)      # Scientific journal color schemes for ggplot2
+library(viridis)    # Colorblind-friendly color palettes
+library(scales)     # Scale functions for ggplot2
+library(patchwork)  # Combine ggplot2 plots
+library(ggcorrplot) # Correlation matrix plots
+library(RColorBrewer) # Color palettes
+library(plotly)     # Interactive plots
+library(lubridate)  # Date-time functions (only need this once)
+library(extrafont)  # Font management for plots
+library(htmlwidgets) # Export interactive plots
+library(cowplot)    # Additional plot arrangement functions
+library(gridExtra)  # Arrange multiple plots
+library(ggpubr)     # Publication-ready plots
+library(ggbeeswarm) # Beeswarm plots
+
+# Tables
+library(kableExtra) # For advanced tables
+library(xtable)     # Convert tables to LaTeX or HTML
+library(reactable)  # Interactive tables
+library(htmltools)  # Required for making pretty tables with reactable
+library(webshot)    # Kable to png
+webshot::install_phantomjs()
+
+# Date functions (only need lubridate)
+library(anytime)    # Parsing dates
+
+# SlimStampen
+#install.packages("devtools") # Install SlimStampen packages. Instructions on https://github.com/VanRijnLab/SlimStampeRData
+library(devtools)
+#devtools::install_github("VanRijnLab/SlimStampeRData",
+                      #   build_vignettes = TRUE,
+                       #  dependencies = TRUE,
+                        # force = TRUE) 
+# The console will show a prompt asking whether all packages should be updated. Select option 1 (by typing 1 and then pressing enter), this will update all packages.
+vignette("SlimStampeRVignette")
+library(SlimStampeRData)
+
+# New data reconfiguration
+library(jsonlite)  # Working with JSON files
+library(UpSetR)    # UpSet plots for set visualization
+
+# Statistical models
+library(lme4)      # Linear mixed-effects models
+library(lmerTest)  # p-values for mixed models
+library(sjPlot)    # Plotting regression results
+library(pscl)      # Regression model diagnostics
+library(glue)      # For APA reports
+library(MuMIn)     # Conditional R-squared values for mixed models
+
+# Statistical power calculations
+library(simr)
+
+```
+
+## Load Data
+
+```{r, echo=FALSE, results= 'hide', message=FALSE, show_col_types = FALSE}
+options(readr.show_col_types = FALSE)
+
+# Load Data
+data_files <- list.files(path = "data/", full.names = TRUE)
+data <- lapply(data_files, read.csv, sep = ";") %>%
+  bind_rows()
+
+# Remove unnecessary columns
+data <- data[, -c(24, 25, 26, 30)]
+
+# Rename headers to match join columns
+data <- data %>%
+  rename(
+    userId = user_id,
+    lessonTitle = lesson_title,
+    lessonId = lesson_id,
+    factId = fact_id,
+    presentationStartTime = presentation_start_time,
+    presentationDuration = presentation_duration,
+    sessionTime = session_time,
+    reactionTime = reaction_time,
+    givenResponse = given_response,
+    sessionId = session_id,
+    numberOfChoices = number_of_choices
+  )
+
+# Remove space from user 247
+data <- data %>%
+  mutate(screen_name = case_when(screen_name == "user 247" ~ "user247", TRUE ~ screen_name))
+
+# Rename Stocco Starter Pack lesson titles to combine with other data
+data <- data %>%
+  mutate(lessonTitle = case_when(
+    lessonTitle == "01 Pasta" ~ "Pasta",
+    lessonTitle == "02 Swahili" ~ "Swahili 1",
+    lessonTitle == "03 Asian Flags" ~ "Asian Flags",
+    lessonTitle == "04 Collectives" ~ "Collectives",
+    lessonTitle == "05 Castles" ~ "Castles",
+    TRUE ~ lessonTitle
+  ))
+
+# Rename Mindfullness lesson titles to combine with other data
+data <- data %>%
+  mutate(lessonTitle = case_when(
+    lessonTitle == "Flowers 1" ~ "Flowers",
+    lessonTitle == "Inventors 1" ~ "Inventors",
+    lessonTitle == "Fruit 1" ~ "Fruit",
+    TRUE ~ lessonTitle
+  ))
+
+# Rename TransplantLines lesson titles to combine with other data
+data <- data %>%
+  mutate(lessonTitle = case_when(
+    lessonTitle == "Kastelen" ~ "Castles",
+    TRUE ~ lessonTitle
+  ))
+
+# Convert the "correct" column to logical values
+data$correct <- as.logical(data$correct)
+
+# Convert the "userId" column to character
+data$userId <- as.character(data$userId)
+
+```
+
+```{r, echo=FALSE}
+
+# Add subject groups
+groups <- read_csv("groups_all.csv", show_col_types = FALSE)
+
+# Convert the "userId" column to character
+groups$userId <- as.character(groups$userId)
+
+# Filter groups 
+data %>% 
+  filter(userId %in% groups$userId) -> data
+data <- inner_join(data, groups) 
+
+# Filter the beta testing accounts
+data <- data[!(data$category=="Admin"),]
+
+# Filter out Recall 
+data <- data[!(data$lessonTitle %in% c("Jellyfish", "Trees", "Pollen/Seeds")), ]
+data <- data[!(data$lessonTitle == "African Flags" & data$category %in% c("Senior MCI", "Senior Control")), ]
+
+# Filter out Practice
+data <- data[!(data$lessonTitle %in% c("0 Practice")),]
+
+# Combine sessions for participants who stopped and started lesson during stim session
+data <- data %>% # cuttle03 AF
+  mutate(sessionId = if_else(sessionId == "4dc466d8-feb8-45a4-aacd-3a1afc22d230",
+                             "951e068e-c7fc-454d-8821-1182a33cb49c",
+                             sessionId))
+
+```
+
+```{r, echo=FALSE}
+
+# Filter the sessions
+sessionData <- data %>% 
+  group_by(userId, sessionId, lessonTitle) %>% 
+  summarize(duration = (max(presentationStartTime) - min(presentationStartTime))/60000,
+            start = min(presentationStartTime),
+            legit = if_else(duration > 6, T, F)) 
+
+sessionData <- sessionData %>%
+  group_by(userId, lessonTitle) %>%
+  arrange(start, .by_group = TRUE) %>%
+  mutate(sessionRank = row_number())
+
+sessionDataFiltered <- sessionData %>%
+  filter(legit == T) %>%
+  group_by(userId, lessonTitle) %>%
+  mutate(minRank = min(sessionRank))
+
+sessionData <- sessionData %>%
+  inner_join(sessionDataFiltered) %>%
+  mutate(usable = if_else(minRank == sessionRank, T, F))
+
+# Order lessons by the order in which individual performed them
+sessionDataWeek <- sessionData %>% 
+  group_by(userId) %>%
+  mutate(date = anytime(start/1000)) %>%
+  #mutate(weekTime = floor(start/(1000*60*60*24*7))) %>%
+  mutate(experimentStart = "2022-06-15 00:00:01") %>%
+  mutate(firstDate = anytime(min(start/1000))) %>%
+  mutate(relativeWeek = (as_datetime(experimentStart) %--% as_datetime(firstDate))/weeks(period(1))) %>%
+  mutate(absoluteWeek = (as_datetime(experimentStart) %--% as_datetime(date))/weeks(period(1))) %>%
+  mutate(week = 1 + floor(absoluteWeek) - floor(relativeWeek))
+
+# Clean the filtered data set
+cleandata_all <- inner_join(sessionDataWeek, data) %>%
+  filter(usable == T)
+
+# Add a new column for 'factText'
+cleandata_all %>%
+  mutate(factText = factId) -> cleandata_all
+cleandata_all$factText <- as.character(cleandata_all$factText)
+
+```
+
+```{r, echo=FALSE, results= 'hide'}
+
+# Set max alpha higher for senior participants
+#MAX_ALPHA <- 0.8
+
+```
+
+```{r echo=TRUE, message=TRUE, results=}
+
+# Calculate fact rep, activation, and alpha
+cleandata_all <- cleandata_all %>%
+  calculate_repetition() #%>%
+ # calculate_alpha_and_activation(maxAlpha = MAX_ALPHA)
+
+```
+
+```{r, echo=FALSE, results= 'hide'}
+
+# Change reactionTime from ms to s
+cleandata_all$reactionTime <- (cleandata_all$reactionTime/1000) 
+
+# Change userId from numerical to character for future graphs  
+cleandata_all$userId <- as.character(cleandata_all$userId)
+
+```
+
+```{r, echo=FALSE, results= 'hide'}
+
+# Calculate avg alpha
+cleandata_lastRep <- cleandata_all %>%
+  group_by(lessonTitle, userId, factId, category, name_or_subtype, age) %>%
+  mutate(LastRepetition = max(repetition)) %>%
+  filter(repetition == LastRepetition) %>%
+  ungroup()  %>%
+  filter(repetition > 1)  # Add this line to filter out repetitions of 1 or less
+
+cleandata_avg1 <- cleandata_lastRep %>%
+  group_by(userId, lessonTitle, category, name_or_subtype, age) %>%
+  summarise(MeanAlpha = mean(alpha), MedianAlpha = median(alpha)) 
+
+cleandata_avg2 <- cleandata_all %>%
+  group_by(userId, lessonTitle) %>%
+  drop_na(givenResponse)%>%
+  summarise(correct = mean(correct), reactionTimeavg=mean(reactionTime)) %>%
+  ungroup()
+
+cleandata_avg_all <- cleandata_avg1 %>% inner_join(cleandata_avg2)
+
+cleandata_avg_all %>% 
+  group_by(userId, lessonTitle) %>% 
+  summarize(numSess=length(unique(lessonTitle))) 
+
+# Change userId from numerical to character & pair by userId for future graphs  
+cleandata_avg_all <- cleandata_avg_all %>%
+  mutate(paired= factor(userId))
+
+```
+
+```{r, echo=FALSE}
+
+options(digits=3) 
+
+# Create table for reactable
+cleandata_avg_allreactable1 <- cleandata_avg_all %>% 
+  group_by(userId, category, name_or_subtype, age) %>%
+   summarise(points = length(lessonTitle),
+             TotalMeanAlpha = mean(MeanAlpha), 
+             TotalMeanAccuracy = mean(correct), 
+             TotalMeanResponseTime = mean(reactionTimeavg))
+
+cleandata_avg_allreactable2 <- cleandata_avg_all %>%
+  group_by(name_or_subtype, age, userId, lessonTitle, MeanAlpha) %>%
+    summarise(lessonTitle, MeanAlpha) %>%
+    pivot_wider(names_from = lessonTitle, values_from = MeanAlpha)
+
+cleandata_avg_allreactable3 <- cleandata_avg_all %>%
+  group_by(name_or_subtype, age, userId, lessonTitle, correct) %>%
+    summarise(lessonTitle, correct) %>%
+    pivot_wider(names_from = lessonTitle, values_from = correct)
+
+cleandata_avg_allreactable4 <- cleandata_avg_all %>%
+  group_by(name_or_subtype, age, userId, lessonTitle, reactionTimeavg) %>%
+    summarise(lessonTitle, reactionTimeavg) %>%
+    pivot_wider(names_from = lessonTitle, values_from = reactionTimeavg)
+
+c_reactable_all <- inner_join(cleandata_avg_allreactable1,cleandata_avg_allreactable2)
+
+# Get number of facts seen and add it to the reactable
+cd1 <-   cleandata_all %>% 
+  group_by(userId, category, name_or_subtype, age, lessonTitle, factId) %>% 
+   summarize(numfacts=length(unique(factId)))
+
+cd2 <- cd1 %>% 
+  group_by(userId) %>% 
+  summarize(numlessons=length(unique(lessonTitle))) %>%
+  ungroup()
+
+cd3 <- cd1 %>%
+  inner_join(cd2)
+
+# Convert the "userId" column to character
+cd3$name_or_subtype <- as.character(cd3$name_or_subtype)
+
+cd4 <- cd3 %>%
+  group_by(userId, category, age, name_or_subtype, numlessons, lessonTitle, factId) %>% 
+  pivot_wider(names_from = factId, values_from = numfacts)%>%
+  replace(is.na(.), 0) %>%
+  mutate(sumfacts = sum(c_across(where(is.numeric))), .after = age) %>%
+  summarize(Avg=(sumfacts))  %>%
+  pivot_wider(names_from=lessonTitle, values_from = Avg) %>%
+  replace(is.na(.), 0) %>%
+  mutate(Avg = ((sum(across(where(is.numeric))))/(numlessons)), .after = numlessons)
+
+c_reactable_all$TotalFactAvg <- cd4$Avg
+
+# Group cd4 data by userId and calculate average
+cd4_grouped <- cd4 %>%
+  group_by(userId) %>%
+  summarise(Avg = mean(Avg, na.rm = TRUE))
+
+# Join the averaged cd4 data with the main dataset
+cleandata_avg_allreactable1 <- cleandata_avg_allreactable1 %>%
+  left_join(cd4_grouped, by = "userId") %>%
+  rename(TotalMeanFactAvg = Avg)
+
+cleandata_avg_allreactable1 <- cleandata_avg_allreactable1 %>%
+  relocate(TotalMeanFactAvg, .after = TotalMeanResponseTime) 
+
+```
+
+```{r, echo=FALSE}
+
+# Save cleaned data 
+save(cleandata_all, file = "cleandata_all.RData")
+save(cleandata_avg_all, file = "cleandata_avg_all.RData")
+save(cleandata_avg_allreactable1, file ="cleandata_avg_allreactable1.RData")
+
+```

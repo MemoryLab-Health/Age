@@ -1,0 +1,800 @@
+---
+title: "Age_analysis"
+author: "Holly Hake"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    code_folding: hide
+    theme: yeti
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+  word_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+
+# Data wrangling
+library(tidyverse)  # Includes dplyr, readr, ggplot2, and stringr, so no need to load them separately
+library(broom)      # For tidying models
+library(broom.mixed) # For tidying models of class lmerModLmerTest
+library(reshape2)   # Reshaping data (if needed)
+library(glmnet)     # Regularization for regression models
+
+# Graphics
+library(ggthemes)   # Additional themes for ggplot2
+library(ggrepel)    # Better text labels for ggplot2
+library(ppcor)      # Partial correlations
+library(ggExtra)    # Additional functions for ggplot2
+library(ggsci)      # Scientific journal color schemes for ggplot2
+library(viridis)    # Colorblind-friendly color palettes
+library(scales)     # Scale functions for ggplot2
+library(patchwork)  # Combine ggplot2 plots
+library(ggcorrplot) # Correlation matrix plots
+library(RColorBrewer) # Color palettes
+library(plotly)     # Interactive plots
+library(lubridate)  # Date-time functions (only need this once)
+library(extrafont)  # Font management for plots
+library(htmlwidgets) # Export interactive plots
+library(cowplot)    # Additional plot arrangement functions
+library(gridExtra)  # Arrange multiple plots
+library(ggpubr)     # Publication-ready plots
+library(ggbeeswarm) # Beeswarm plots
+
+# Tables
+library(kableExtra) # For advanced tables
+library(xtable)     # Convert tables to LaTeX or HTML
+library(reactable)  # Interactive tables
+library(htmltools)  # Required for making pretty tables with reactable
+library(webshot)    # Kable to png
+webshot::install_phantomjs()
+
+# Date functions (only need lubridate)
+library(anytime)    # Parsing dates
+
+# SlimStampen
+#install.packages("devtools") # Install SlimStampen packages. Instructions on https://github.com/VanRijnLab/SlimStampeRData
+library(devtools)
+#devtools::install_github("VanRijnLab/SlimStampeRData",
+                      #   build_vignettes = TRUE,
+                       #  dependencies = TRUE,
+                        # force = TRUE) 
+# The console will show a prompt asking whether all packages should be updated. Select option 1 (by typing 1 and then pressing enter), this will update all packages.
+#vignette("SlimStampeRVignette")
+library(SlimStampeRData)
+
+# New data reconfiguration
+library(jsonlite)  # Working with JSON files
+library(UpSetR)    # UpSet plots for set visualization
+
+# Statistical models
+library(lme4)      # Linear mixed-effects models
+library(lmerTest)  # p-values for mixed models
+library(sjPlot)    # Plotting regression results
+library(pscl)      # Regression model diagnostics
+library(glue)      # For APA reports
+library(MuMIn)     # Conditional R-squared values for mixed models
+
+# Statistical power calculations
+library(simr)
+
+```
+
+```{r}
+
+# Plot theme
+library(wesanderson)
+
+theme_set(theme_light(base_size = 14) +
+            theme(strip.text = element_text(colour = "black")))
+
+condition_colours <- wes_palette("Darjeeling1", n = 5)
+condition_colours[c(2, 4, 5)] <- condition_colours[c(4, 5, 2)]
+
+dataset_colours <- wes_palette("Darjeeling2", n = 5)[c(2, 3)]
+
+```
+
+```{r}
+
+# Load data
+load("cleandata_all.RData")
+load("cleandata_avg_all.RData")
+load("cleandata_avg_allreactable1.RData")
+
+```
+
+```{r}
+
+# Clean and prepare data for analysis
+
+# Create a factor for paired userId in cleandata_avg_allreactable1
+cleandata_avg_allreactable1 <- cleandata_avg_allreactable1 %>%
+  mutate(paired = factor(userId))
+
+# Remove specific categories and subtypes from cleandata_avg_allreactable1
+cleandata_avg_allreactable1 <- cleandata_avg_allreactable1 %>%
+  filter(!category %in% c("Family", "Friend")) %>%
+  filter(!name_or_subtype %in% c("stoccofam01"))
+
+# Remove specific subtypes from cleandata_avg_all
+cleandata_avg_all <- cleandata_avg_all %>%
+  filter(!name_or_subtype %in% c("Anon", "stoccofam01"))
+
+# Omit NA values from both datasets
+cleandata_avg_all <- na.omit(cleandata_avg_all)
+cleandata_avg_allreactable1 <- na.omit(cleandata_avg_allreactable1)
+
+```
+
+```{r}
+
+# Define age category conditions for cleandata_avg_allreactable1
+cleandata_avg_allreactable1 <- cleandata_avg_allreactable1 %>%
+  mutate(category2 = case_when(
+    age == 5 ~ "Early Childhood (5)",
+    age >= 6 & age <= 12 ~ "Middle and Late Childhood (6-12)",
+    age >= 13 & age <= 17 ~ "Adolescence (13-17)",
+    age >= 18 & age <= 29 ~ "Early Adulthood (18-29)",
+    age >= 30 & age <= 45 ~ "Middle Adulthood (30-45)",
+    age >= 46 & age <= 64 ~ "Mature Adulthood (46-64)",
+    age >= 65 ~ "Senior Adulthood (65+)"
+  ))
+
+# Define additional age category conditions for "Senior MCI"
+cleandata_avg_allreactable1 <- cleandata_avg_allreactable1 %>%
+  mutate(category3 = case_when(
+    category2 == "Mature Adulthood (46-64)" & category == "Senior MCI" ~ "Mature Adulthood (46-64, Impaired)",
+    category2 == "Senior Adulthood (65+)" & category == "Senior MCI" ~ "Senior Impaired (65+)",
+    TRUE ~ category2  # Retain original category if conditions are not met
+  ))
+
+# Define additional conditions for "Senior PreAD" in category3
+cleandata_avg_allreactable1 <- cleandata_avg_allreactable1 %>%
+  mutate(category3 = case_when(
+    category == "Senior PreAD" & age >= 46 & age <= 64 ~ "Mature Adulthood (46-64, Early Onset AD)",
+    TRUE ~ category3  # Retain original category if conditions are not met
+  ))
+
+# Convert category3 to a factor with specified levels
+cleandata_avg_allreactable1$category3 <- factor(cleandata_avg_allreactable1$category3, 
+  levels = c("Early Childhood (5)", 
+             "Middle and Late Childhood (6-12)", 
+             "Adolescence (13-17)", 
+             "Early Adulthood (18-29)", 
+             "Middle Adulthood (30-45)", 
+             "Mature Adulthood (46-64)", 
+             "Mature Adulthood (46-64, Impaired)", 
+             "Mature Adulthood (46-64, Early Onset AD)",
+             "Senior Adulthood (65+)",  
+             "Senior Impaired (65+)")
+)
+
+# Define age category conditions for cleandata_avg_all
+cleandata_avg_all <- cleandata_avg_all %>%
+  mutate(category2 = case_when(
+    age == 5 ~ "Early Childhood (5)",
+    age >= 6 & age <= 12 ~ "Middle and Late Childhood (6-12)",
+    age >= 13 & age <= 17 ~ "Adolescence (13-17)",
+    age >= 18 & age <= 29 ~ "Early Adulthood (18-29)",
+    age >= 30 & age <= 45 ~ "Middle Adulthood (30-45)",
+    age >= 46 & age <= 64 ~ "Mature Adulthood (46-64)",
+    age >= 65 ~ "Senior Adulthood (65+)"
+  ))
+
+# Define additional age category conditions for "Senior MCI" in cleandata_avg_all
+cleandata_avg_all <- cleandata_avg_all %>%
+  mutate(category3 = case_when(
+    category2 == "Mature Adulthood (46-64)" & category == "Senior MCI" ~ "Mature Adulthood (46-64, Impaired)",
+    category2 == "Senior Adulthood (65+)" & category == "Senior MCI" ~ "Senior Impaired (65+)",
+    TRUE ~ category2  # Retain original category if conditions are not met
+  ))
+
+# Define additional conditions for "Senior PreAD" in category3
+cleandata_avg_all <- cleandata_avg_all %>%
+  mutate(category3 = case_when(
+    category == "Senior PreAD" & age >= 46 & age <= 64 ~ "Mature Adulthood (46-64, Early Onset AD)",
+    TRUE ~ category3  # Retain original category if conditions are not met
+  ))
+
+# Convert category3 to a factor with specified levels for cleandata_avg_all
+cleandata_avg_all$category3 <- factor(cleandata_avg_all$category3,  
+  levels = c("Early Childhood (5)", 
+             "Middle and Late Childhood (6-12)", 
+             "Adolescence (13-17)", 
+             "Early Adulthood (18-29)", 
+             "Middle Adulthood (30-45)", 
+             "Mature Adulthood (46-64)", 
+             "Mature Adulthood (46-64, Impaired)", 
+             "Mature Adulthood (46-64, Early Onset AD)",
+             "Senior Adulthood (65+)",  
+             "Senior Impaired (65+)")
+)
+
+# Remove the n=1 for specific groups in cleandata_avg_allreactable1
+cleandata_avg_allreactable1 <- cleandata_avg_allreactable1 %>%
+  filter(!category3 %in% c("Mature Adulthood (46-64, Impaired)", 
+                            "Mature Adulthood (46-64, Early Onset AD)"))
+
+# Remove the n=1 for specific groups in cleandata_avg_all
+cleandata_avg_all <- cleandata_avg_all %>%
+  filter(!category3 %in% c("Mature Adulthood (46-64, Impaired)", 
+                            "Mature Adulthood (46-64, Early Onset AD)"))
+
+```
+
+## Age Counts
+
+```{r}
+
+# Create a table with counts of each age grouped by category3
+age_counts <- cleandata_avg_allreactable1 %>%
+  group_by(age, category3) %>%
+  summarise(n = n(), .groups = "drop")  # Drop grouping for subsequent operations
+
+# Create a table with counts of each age group (category3)
+agegroup_counts <- cleandata_avg_allreactable1 %>%
+  group_by(category3) %>%
+  summarise(n = n(), .groups = "drop")  # Drop grouping for subsequent operations
+
+```
+
+```{r}
+
+# Print the age counts table 
+age_counts %>%
+  kable(caption = "Counts of Each Age", col.names = c("Age", "Group", "N"), format = "html") %>%
+  kable_styling(bootstrap_options = c("hover", "striped")) %>%
+  column_spec(1, width = "200px") %>% # Set a fixed width for the first column
+  kable_styling(latex_options = c("hold_position")) # Optional: hold position in LaTeX
+
+
+```
+
+```{r}
+
+# Print the age group counts table
+agegroup_counts %>%
+  kable(caption = "Counts of Each Age Group", col.names = c("Age Group", "N")) %>%
+  kable_styling(bootstrap_options = c("hover", "striped"))
+
+```
+
+```{r}
+
+# Convert category3 to a factor with defined levels for consistent plotting
+age_counts$category3 <- factor(age_counts$category3, 
+  levels = c("Early Childhood (5)", 
+             "Middle and Late Childhood (6-12)", 
+             "Adolescence (13-17)", 
+             "Early Adulthood (18-29)", 
+             "Middle Adulthood (30-45)", 
+             "Mature Adulthood (46-64)", 
+             "Mature Adulthood (46-64, Impaired)", 
+             "Mature Adulthood (46-64, Early Onset AD)", 
+             "Senior Adulthood (65+)",  
+             "Senior Impaired (65+)"))
+
+# Create a bar plot for age group counts
+agegroups <- ggplot(agegroup_counts, aes(x = category3, y = n, fill = category3)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.6) +
+  geom_text(aes(label = n),  # Add the count labels on the bars
+            position = position_dodge(width = 0.9),  # Adjust position to dodge correctly
+            vjust = -0.5,  # Vertical adjustment (above the bars)
+            size = 3.5) +  # Size of the text
+  xlab(" ") +
+  ylab("Count") +
+  labs(fill = "Age Group", color = "Age Group") +
+  theme(
+    legend.position = "right",
+    legend.key.size = unit(0.9, "lines")
+  ) +
+  scale_x_discrete(labels = c(
+    "Early Childhood (5)" = "5",
+    "Middle and Late Childhood (6-12)" = "6-12",
+    "Adolescence (13-17)" = "13-17",
+    "Early Adulthood (18-29)" = "18-29",
+    "Middle Adulthood (30-45)" = "30-45",
+    "Mature Adulthood (46-64)" = "46-64",
+    "Mature Adulthood (46-64, Impaired)" = "46-64(I)",
+    "Mature Adulthood (46-64, Early Onset AD)" = "46-64(AD)",
+    "Senior Adulthood (65+)" = "65+",
+    "Senior Impaired (65+)" = "65+(I)"
+  )) +
+  ylim(0, max(agegroup_counts$n) + 10) 
+
+# Create a bar plot for age counts
+allages <- ggplot(age_counts, aes(x = factor(age), y = n, fill = category3)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.6) +
+  xlab("Age") +
+  ylab("Count") +
+  labs(fill = "Age Group", color = "Age Group") +
+  theme(
+    legend.position = "none",  # Hide the legend for this plot
+    legend.key.size = unit(0.9, "lines"),
+    axis.text.x = element_text(size = 5)
+  )
+
+# Combine plots using cowplot
+datacollection_agecount <- cowplot::plot_grid(
+  agegroups, 
+  allages, 
+  ncol = 1, 
+  rel_heights = c(1, 1), 
+  align = "v"
+)
+
+# Save the combined plot as a PNG file
+ggsave("figures/datacollection_agecount.png", datacollection_agecount)
+
+datacollection_agecount
+
+```
+
+## Age Measures
+
+```{r}
+
+# Create boxplot for TotalMeanAlpha
+p1 <- ggplot(cleandata_avg_allreactable1, aes(x = category3, y = TotalMeanAlpha, color = category3, fill = category3)) +
+  geom_boxplot(size = 0.5, width = 0.8, alpha = 0.5) +
+  xlab("Age Group") +
+  ylab(expression(paste(italic("SoF")))) +
+  labs(fill = "Age Group", color = "Age Group") +
+  theme(
+    legend.position = "hide",
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 9)
+  ) +
+  scale_x_discrete(labels = c(
+    "Early Childhood (5)" = "5",
+    "Middle and Late Childhood (6-12)" = "6-12",
+    "Adolescence (13-17)" = "13-17",
+    "Early Adulthood (18-29)" = "18-29",
+    "Middle Adulthood (30-45)" = "30-45",
+    "Mature Adulthood (46-64)" = "46-64",
+    "Senior Adulthood (65+)" = "65+",
+    "Senior Impaired (65+)" = "65+(I)"
+  ))
+
+# Create boxplot for TotalMeanFactAvg
+p2 <- ggplot(cleandata_avg_allreactable1, aes(x = category3, y = TotalMeanFactAvg, color = category3, fill = category3)) +
+  geom_boxplot(size = 0.5, width = 0.8, alpha = 0.5) +
+  xlab("Age Group") +
+  ylab("No. Facts") +
+  labs(fill = "Age Group", color = "Age Group") +
+  theme(
+    legend.position = "hide",
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 9)
+  ) +
+  scale_x_discrete(labels = c(
+    "Early Childhood (5)" = "5",
+    "Middle and Late Childhood (6-12)" = "6-12",
+    "Adolescence (13-17)" = "13-17",
+    "Early Adulthood (18-29)" = "18-29",
+    "Middle Adulthood (30-45)" = "30-45",
+    "Mature Adulthood (46-64)" = "46-64",
+    "Senior Adulthood (65+)" = "65+",
+    "Senior Impaired (65+)" = "65+(I)"
+  ))
+
+# Create boxplot for TotalMeanResponseTime
+p3 <- ggplot(cleandata_avg_allreactable1, aes(x = category3, y = TotalMeanResponseTime, color = category3, fill = category3)) +
+  geom_boxplot(size = 0.5, width = 0.8, alpha = 0.5) +
+  xlab("Age Group") +
+  ylab("Reaction (s)") +
+  labs(fill = "Age Group", color = "Age Group") +
+  theme(
+    legend.position = "hide",
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 9)
+  ) +
+  scale_x_discrete(labels = c(
+    "Early Childhood (5)" = "5",
+    "Middle and Late Childhood (6-12)" = "6-12",
+    "Adolescence (13-17)" = "13-17",
+    "Early Adulthood (18-29)" = "18-29",
+    "Middle Adulthood (30-45)" = "30-45",
+    "Mature Adulthood (46-64)" = "46-64",
+    "Senior Adulthood (65+)" = "65+",
+    "Senior Impaired (65+)" = "65+(I)"
+  ))
+
+# Create boxplot for TotalMeanAccuracy
+p4 <- ggplot(cleandata_avg_allreactable1, aes(x = category3, y = TotalMeanAccuracy, color = category3, fill = category3)) +
+  geom_boxplot(size = 0.5, width = 0.8, alpha = 0.5, position = "dodge") +
+  scale_x_continuous(breaks = 1:6) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  xlab("Age Group") +
+  ylab("Accuracy") +
+  labs(fill = "Age Group", color = "Age Group") +
+  theme(
+    legend.position = "hide",
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 9)
+  ) +
+  scale_x_discrete(labels = c(
+    "Early Childhood (5)" = "5",
+    "Middle and Late Childhood (6-12)" = "6-12",
+    "Adolescence (13-17)" = "13-17",
+    "Early Adulthood (18-29)" = "18-29",
+    "Middle Adulthood (30-45)" = "30-45",
+    "Mature Adulthood (46-64)" = "46-64",
+    "Senior Adulthood (65+)" = "65+",
+    "Senior Impaired (65+)" = "65+(I)"
+  ))
+
+# Combine all plots into one
+age_measures <- cowplot::plot_grid(p1, p2, p3, p4)
+
+# Save the combined plot to a file
+ggsave("figures/age_measures.png", age_measures)
+
+age_measures
+
+```
+
+```{r}
+
+# Create a table of the values
+mean_alpha_table <- cleandata_avg_allreactable1 %>%
+  group_by(category3) %>%
+  summarise(
+    Mean_TotalMeanAlpha = mean(TotalMeanAlpha, na.rm = TRUE),
+    Mean_TotalMeanFactAvg = mean(TotalMeanFactAvg, na.rm = TRUE),
+    Mean_TotalMeanResponseTime = mean(TotalMeanResponseTime, na.rm = TRUE),
+    Mean_TotalMeanAccuracy = mean(TotalMeanAccuracy, na.rm = TRUE),
+    Count_Subjects = n_distinct(userId),  # Count unique subjects
+    Total_Lessons = sum(points, na.rm = TRUE)  # Sum points for total lessons
+  ) %>%
+  arrange(factor(
+    category3,
+    levels = c(
+      "Early Childhood (5)",
+      "Middle and Late Childhood (6-12)",
+      "Adolescence (13-17)",
+      "Early Adulthood (18-29)",
+      "Middle Adulthood (30-45)",
+      "Mature Adulthood (46-64)",
+      "Senior Adulthood (65+)",
+      "Senior Impaired (65+)"
+    )
+  ))
+
+mean_alpha_table %>%
+  kable(caption = "Means for Each Age Group", col.names = c("Age Group", "SoF", "No. Facts", "RT(s)", "Acc", "N", "Total Lessons")) %>%
+  kable_styling(bootstrap_options = c("hover", "striped"))
+
+```
+
+```{r}
+
+# If you would like to save the table as a png...uncomment below
+
+# Print the table using knitr and kableExtra
+#mean_alpha_table %>%
+#  kable(
+#    format = "html",
+#    col.names = c("Age Group", "SoF", "No. Facts", "RT(s)", "Acc", "N", "Total Lessons"),
+#    caption = "Means for Each Age Group"
+#  ) %>%
+#  kable_styling(
+#    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+#    full_width = FALSE
+#  ) %>%
+#  save_kable("mean_alpha_table.html")
+
+# Convert the HTML file to PNG with improved quality
+# webshot(
+#  "mean_alpha_table.html",
+#  "figures/mean_alpha_table_image.png",
+#  vwidth = 800,  # Adjust this width as needed
+#  vheight = 600,  # Adjust this height as needed
+#  zoom = 2        # Increase zoom for higher resolution
+#)
+
+```
+
+
+```{r}
+
+# Create beeswarm Speed of Forgetting (SoF) plot
+beeswarm <- ggplot(cleandata_avg_all, aes(x = category3, y = MeanAlpha, color = category3)) +
+  geom_quasirandom(alpha = 0.8) +
+  geom_boxplot(width = 0.6, size = 0.2, alpha = 0.6) +
+  stat_summary(fun = mean, geom = "pointrange", size = 0.2, shape = 1, color = "grey") +
+  xlab(" ") +
+  ylab("Lesson SoF") +
+  ggtitle(" ") +
+  labs(col = "Age Group", fill = "Age Group") +
+  theme(legend.position = "right") +
+  scale_x_discrete(labels = c(
+    "Early Childhood (5)" = "5",
+    "Middle and Late Childhood (6-12)" = "6-12",
+    "Adolescence (13-17)" = "13-17",
+    "Early Adulthood (18-29)" = "18-29",
+    "Middle Adulthood (30-45)" = "30-45",
+    "Mature Adulthood (46-64)" = "46-64",
+    "Mature Adulthood (46-64, Impaired)" = "46-64(I)",
+    "Mature Adulthood (46-64, Early Onset AD)" = "46-64(AD)",
+    "Senior Adulthood (65+)" = "65+",
+    "Senior Impaired (65+)" = "65+(I)"
+  ))
+
+# Save the beeswarm plot
+ggsave("figures/beeswarm.png", beeswarm)
+
+beeswarm
+
+```
+
+```{r}
+
+# Create Speed of Forgetting (SoF) plot for all age groups
+sof <- ggplot(cleandata_avg_allreactable1, aes(x = age, y = TotalMeanAlpha)) +
+  geom_point(aes(color = category3, group = paired), size = 4.5, alpha = 0.5, stroke = 0, position = position_dodge(0.25)) +
+  geom_smooth(method = 'loess', se = FALSE, color = 'black', size = 1) +  # Add loess trend line
+  xlab("Age") +
+  ylab(expression(paste(italic("SoF")))) +
+  ggtitle(expression(paste(italic("SoF"), " with impaired"))) +
+  labs(col = "Age Group", fill = "Age Group") +
+  theme(legend.position = "hide")
+
+# Remove impaired group from data
+cleandata_avg_allreactable1_noimp <- cleandata_avg_allreactable1[!cleandata_avg_allreactable1$category3 %in% c("Senior Impaired (65+)"),]
+
+# Create SoF plot without impaired group
+sof_noimp <- ggplot(cleandata_avg_allreactable1_noimp, aes(x = age, y = TotalMeanAlpha)) +
+  geom_point(aes(color = category3, group = paired), size = 4.5, alpha = 0.5, stroke = 0, position = position_dodge(0.25)) +
+  geom_smooth(method = 'loess', se = FALSE, color = 'black', size = 1) +  # Add loess trend line
+  scale_color_manual(values = c("#f7766d", "#c39a01", "#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  scale_fill_manual(values = c("#f7766d", "#c39a01", "#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  xlab("Age") +
+  ylab(expression(paste(italic("SoF")))) +
+  ggtitle("without impaired") +
+  labs(col = "Age Group", fill = "Age Group") +
+  theme(legend.position = "none")
+
+# Save the plot
+sof_across_age <- cowplot::plot_grid(sof+sof_noimp)
+ggsave("figures/sof_across_age.png", sof_across_age)
+
+sof_across_age
+
+```
+
+```{r}
+
+# Create dataset for Pasta lesson only
+cleandata_avg_PASTA <- cleandata_avg_all[cleandata_avg_all$lessonTitle == "Pasta",]
+
+# Create SoF plot for Pasta lesson
+pasta <- ggplot(cleandata_avg_PASTA, aes(x = age, y = MeanAlpha)) +
+  geom_point(aes(color = category3, group = paired), alpha = 0.5, size = 4.5, stroke = 0, position = position_dodge(0.25)) +
+  geom_smooth(method = 'loess', se = FALSE, color = 'black', size = 1) +  # Add loess trend line
+  scale_color_manual(values = c("#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  scale_fill_manual(values = c("#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  xlab(" ") +
+  ylab(expression(paste(italic("Pasta SoF")))) +
+  labs(col = "Age Group", fill = "Age Group") +
+  theme(legend.position = "hide")
+
+# Remove impaired group from Pasta data
+cleandata_avg_PASTA_noimp <- cleandata_avg_PASTA[!cleandata_avg_PASTA$category3 %in% c("Senior Impaired (65+)"),]
+
+# Create SoF plot for Pasta lesson without impaired group
+pasta_noimp <- ggplot(cleandata_avg_PASTA_noimp, aes(x = age, y = MeanAlpha)) +
+  geom_point(aes(color = category3, group = paired), alpha = 0.5, size = 4.5, stroke = 0, position = position_dodge(0.25)) +
+  geom_smooth(method = 'loess', se = FALSE, color = 'black', size = 1) +  # Add loess trend line
+  scale_color_manual(values = c("#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  scale_fill_manual(values = c("#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  xlab(" ") +
+  ylab(expression(paste(italic("Pasta SoF")))) +
+  labs(col = "Age Group", fill = "Age Group") +
+  theme(legend.position = "hide")
+
+# Create dataset for Castles lesson only
+cleandata_avg_CASTLES <- cleandata_avg_all[cleandata_avg_all$lessonTitle == "Castles",]
+
+# Create SoF plot for Castles lesson
+castles <- ggplot(cleandata_avg_CASTLES, aes(x = age, y = MeanAlpha)) +
+  geom_point(aes(color = category3, group = paired), alpha = 0.5, size = 4.5, stroke = 0, position = position_dodge(0.25)) +
+  geom_smooth(method = 'loess', se = FALSE, color = 'black', size = 1) +  # Add loess trend line
+  scale_color_manual(values = c("#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  scale_fill_manual(values = c("#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  xlab(" ") +
+  ylab(expression(paste(italic("Castles SoF")))) +
+  labs(col = "Age Group", fill = "Age Group") +
+  theme(legend.position = "hide")
+
+# Remove impaired group from Castles data
+cleandata_avg_CASTLES_noimp <- cleandata_avg_CASTLES[!cleandata_avg_CASTLES$category3 %in% c("Senior Impaired (65+)"),]
+
+# Create SoF plot for Castles lesson without impaired group
+castles_noimp <- ggplot(cleandata_avg_CASTLES_noimp, aes(x = age, y = MeanAlpha)) +
+  geom_point(aes(color = category3, group = paired), alpha = 0.5, size = 4.5, stroke = 0, position = position_dodge(0.25)) +
+  geom_smooth(method = 'loess', se = FALSE, color = 'black', size = 1) +  # Add loess trend line
+  scale_color_manual(values = c("#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  scale_fill_manual(values = c("#54b300", "#00c094", "#02b7eb", "#a58aff", "#fb61d7")) +
+  xlab(" ") +
+  ylab(expression(paste(italic("Castles SoF")))) +
+  labs(col = "Age Group", fill = "Age Group") +
+  theme(legend.position = "hide")
+
+# Combine and save SoF plots into a grid for comparison
+pasta_castles <- cowplot::plot_grid(pasta+pasta_noimp+castles+castles_noimp)
+ggsave("figures/pasta_castles.png", pasta_castles)
+
+pasta_castles
+
+```
+
+## LMER Report
+
+```{r}
+
+# Filter out rows with missing MeanAlpha values
+complete_lmer <- filter(cleandata_avg_all, !is.na(MeanAlpha))
+
+# Center the age variable by subtracting the mean age
+complete_lmer <- complete_lmer %>%
+  mutate(centeredAge = age - mean(age))
+
+# Fixed effects model with centeredAge and random intercept for lessonTitle
+model_fixed_age_random <- lmer(MeanAlpha ~ centeredAge + (1|lessonTitle), complete_lmer)
+
+# Fixed effects model with category3 and centeredAge, random intercept for lessonTitle
+model_fixed_cat_age_random <- lmer(MeanAlpha ~ category3 + centeredAge + (1|lessonTitle), complete_lmer)
+
+# Fixed effects model with category3 and centeredAge, random intercepts for lessonTitle and userId
+model_fixed_cat_age_random_user <- lmer(MeanAlpha ~ category3 + centeredAge + (1|lessonTitle) + (1|userId), complete_lmer)
+
+# Mixed model with fixed effects and random slope for userId
+model_fixed_cat_age_random_slope <- lmer(MeanAlpha ~ category3 + centeredAge + (1|lessonTitle) + (1 + centeredAge | userId), complete_lmer)
+
+# Interaction model with category3 and centeredAge, random intercepts for lessonTitle and userId
+model_interaction_cat_age_random <- lmer(MeanAlpha ~ category3 * centeredAge + (1|lessonTitle) + (1|userId), complete_lmer)
+
+```
+
+```{r}
+
+# Use `anova` function to see if full model is better than base model
+anova(model_fixed_age_random, model_fixed_cat_age_random, model_fixed_cat_age_random_user, model_fixed_cat_age_random_slope, model_interaction_cat_age_random) %>%
+  xtable() %>%
+  kable(digits=4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+```{r}
+
+# Table with all the model effects
+model_interaction_cat_age_random %>%  
+  tidy() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("hover", "striped"))
+
+```
+
+```{r}
+
+# APA-style report
+tab_model(model_interaction_cat_age_random)
+
+```
+
+## Model Summary Report
+
+The model summary shows the results of a mixed-effects linear regression (lmer) that predicts "MeanAlpha" based on various categorical age groups (in the variable category3), as well as random intercepts for "lessonTitle" and "userId". 
+
+```{r}
+
+# Function to format p-values, handling missing values
+format_p_value <- function(p_value) {
+  if (is.na(p_value) || length(p_value) == 0) {
+    return("NA")
+  } else if (p_value < .001) {
+    return("< .001")
+  } else {
+    return(sprintf("= %.3f", p_value))
+  }
+}
+
+model_summary <- tidy(model_interaction_cat_age_random, conf.int = TRUE)
+
+# Extract values for reporting 
+intercept <- model_summary %>% filter(term == "(Intercept)")
+adolescence <- model_summary %>% filter(term == "category3Adolescence (13-17)")
+early_adulthood <- model_summary %>% filter(term == "category3Early Adulthood (18-29)")
+middle_adulthood <- model_summary %>% filter(term == "category3Middle Adulthood (30-45)")
+mature_adulthood <- model_summary %>% filter(term == "category3Mature Adulthood (46-64)")
+senior_adulthood <- model_summary %>% filter(term == "category3Senior Adulthood (65+)")
+senior_impaired <- model_summary %>% filter(term == "category3Senior Impaired (65+)")
+
+
+# Calculate R-squared values
+r_squared_values <- r.squaredGLMM(model_interaction_cat_age_random)
+marginal_r_squared <- round(r_squared_values[1], 3)  
+conditional_r_squared <- round(r_squared_values[2], 3)
+
+```
+
+## APA Style Report
+
+```{r}
+
+# Construct the APA-style report
+adolescence_report <- if (adolescence$p.value < 0.05) {
+  glue::glue("Adolescents (13-17) had a significant reduction in Mean Alpha, b = {round(adolescence$estimate, 2)}, 95% CI [{round(adolescence$conf.low, 2)}, {round(adolescence$conf.high, 2)}], p {format_p_value(adolescence$p.value)}.")
+} else {
+  glue::glue("Adolescents (13-17) had a non-significant reduction in Mean Alpha, b = {round(adolescence$estimate, 2)}, 95% CI [{round(adolescence$conf.low, 2)}, {round(adolescence$conf.high, 2)}], p {format_p_value(adolescence$p.value)}.")
+}
+
+early_adulthood_report <- if (early_adulthood$p.value < 0.05) {
+  glue::glue("Early adulthood (18-29) had a significant reduction in Mean Alpha, b = {round(early_adulthood$estimate, 2)}, 95% CI [{round(early_adulthood$conf.low, 2)}, {round(early_adulthood$conf.high, 2)}], p {format_p_value(early_adulthood$p.value)}.")
+} else {
+  glue::glue("Early adulthood (18-29) had a non-significant reduction in Mean Alpha, b = {round(early_adulthood$estimate, 2)}, 95% CI [{round(early_adulthood$conf.low, 2)}, {round(early_adulthood$conf.high, 2)}], p {format_p_value(early_adulthood$p.value)}.")
+}
+
+middle_adulthood_report <- if (middle_adulthood$p.value < 0.05) {
+  glue::glue("Middle adulthood (30-45) also showed a significant reduction in Mean Alpha, b = {round(middle_adulthood$estimate, 2)}, 95% CI [{round(middle_adulthood$conf.low, 2)}, {round(middle_adulthood$conf.high, 2)}], p {format_p_value(middle_adulthood$p.value)}.")
+} else {
+  glue::glue("Middle adulthood (30-45) had a non-significant reduction in Mean Alpha, b = {round(middle_adulthood$estimate, 2)}, 95% CI [{round(middle_adulthood$conf.low, 2)}, {round(middle_adulthood$conf.high, 2)}], p {format_p_value(middle_adulthood$p.value)}.")
+}
+
+mature_adulthood_report <- if (mature_adulthood$p.value < 0.05) {
+  glue::glue("Mature adulthood (46-64) exhibited a significant reduction in Mean Alpha, b = {round(mature_adulthood$estimate, 2)}, 95% CI [{round(mature_adulthood$conf.low, 2)}, {round(mature_adulthood$conf.high, 2)}], p {format_p_value(mature_adulthood$p.value)}.")
+} else if (mature_adulthood$p.value < 0.1) {
+  glue::glue("Mature adulthood (46-64) exhibited a marginally significant reduction in Mean Alpha, b = {round(mature_adulthood$estimate, 2)}, 95% CI [{round(mature_adulthood$conf.low, 2)}, {round(mature_adulthood$conf.high, 2)}], p {format_p_value(mature_adulthood$p.value)}.")
+} else {
+  glue::glue("Mature adulthood (46-64) had a non-significant reduction in Mean Alpha, b = {round(mature_adulthood$estimate, 2)}, 95% CI [{round(mature_adulthood$conf.low, 2)}, {round(mature_adulthood$conf.high, 2)}], p {format_p_value(mature_adulthood$p.value)}.")
+}
+
+senior_adulthood_report <- if (senior_adulthood$p.value < 0.05) {
+  glue::glue("For the senior age groups, Senior Adulthood (65+) showed a significant difference, b = {round(senior_adulthood$estimate, 2)}, 95% CI [{round(senior_adulthood$conf.low, 2)}, {round(senior_adulthood$conf.high, 2)}], p {format_p_value(senior_adulthood$p.value)}.")
+} else {
+  glue::glue("For the senior age groups, Senior Adulthood (65+) showed a non-significant difference, b = {round(senior_adulthood$estimate, 2)}, 95% CI [{round(senior_adulthood$conf.low, 2)}, {round(senior_adulthood$conf.high, 2)}], p {format_p_value(senior_adulthood$p.value)}.")
+}
+
+senior_impaired_report <- if (senior_impaired$p.value < 0.05) {
+  glue::glue("Senior Impaired (65+) also showed a significant difference, b = {round(senior_impaired$estimate, 2)}, 95% CI [{round(senior_impaired$conf.low, 2)}, {round(senior_impaired$conf.high, 2)}], p {format_p_value(senior_impaired$p.value)}.")
+} else {
+  glue::glue("Senior Impaired (65+) showed a non-significant difference, b = {round(senior_impaired$estimate, 2)}, 95% CI [{round(senior_impaired$conf.low, 2)}, {round(senior_impaired$conf.high, 2)}], p {format_p_value(senior_impaired$p.value)}.")
+}
+
+# Combine all sections into the final report
+apa_report <- glue::glue("
+The linear mixed-effects model predicting Mean Alpha yielded a significant intercept, b = {round(intercept$estimate, 2)}, 95% CI [{round(intercept$conf.low, 2)}, {round(intercept$conf.high, 2)}], p {format_p_value(intercept$p.value)}. 
+
+For age categories:
+
+{adolescence_report}
+
+{early_adulthood_report}
+
+{middle_adulthood_report}
+
+{mature_adulthood_report}
+
+{senior_adulthood_report}
+
+{senior_impaired_report}
+
+The model explains {round(r.squaredGLMM(model_interaction_cat_age_random)[1], 3)} of the variance in Mean Alpha based on the fixed effects (R²_Marginal), and {round(r.squaredGLMM(model_interaction_cat_age_random)[2], 3)} when both fixed and random effects are considered (R²_Conditional).
+")
+
+# Print the APA report
+#cat(apa_report)
+
+```
+
+`r apa_report`
